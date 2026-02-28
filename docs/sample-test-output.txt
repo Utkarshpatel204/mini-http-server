@@ -1,0 +1,11 @@
+g++ -std=c++17 -Wall src/files.cpp src/http.cpp src/logger.cpp src/main.cpp src/server.cpp -o server
+./scripts/test.sh
+[1/4] Building server...
+[2/4] Starting server...
+[3/4] Running HTTP checks...
+PASS: GET / (200)
+PASS: GET /missing-file (404)
+PASS: POST / (405)
+PASS: Traversal path (400)
+PASS: GET / HTTP/2.0 (505)
+[4/4] All tests passed.

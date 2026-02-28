@@ -1,7 +1,7 @@
 CXX = g++
 CXXFLAGS = -std=c++17 -Wall
 
-SRC = src/main.cpp
+SRC = $(wildcard src/*.cpp)
 OUT = server
 
 all:

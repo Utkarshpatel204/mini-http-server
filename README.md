@@ -5,14 +5,14 @@ A simple HTTP/1.1 static file server built from scratch in C++ using POSIX socke
 ## Features
 
 - TCP server lifecycle: `socket`, `bind`, `listen`, `accept`, `recv`, `send`, `close`
-- HTTP request line parsing with validation
 - Stream-safe request reading (reads until `\r\n\r\n`)
+- Strict request-line parsing and validation
 - Static file serving from `www/`
 - MIME type handling for common file extensions
-- Status handling: `200`, `400`, `404`, `405`, `505`
+- Status handling: `200`, `400`, `404`, `405`, `503`, `505`
 - Path safety checks to block traversal attempts
 - Request logging to `logs/server.log`
-- Thread-per-connection concurrency model
+- Thread-per-connection model with max concurrent client guard
 
 ## Project Structure
 
@@ -20,15 +20,27 @@ A simple HTTP/1.1 static file server built from scratch in C++ using POSIX socke
 mini-http-server/
 ├── Makefile
 ├── README.md
+├── docs/
+│   ├── architecture.md
+│   ├── sample-log-output.txt
+│   └── sample-test-output.txt
 ├── scripts/
 │   └── test.sh
 ├── src/
-│   └── main.cpp
+│   ├── files.cpp / files.h
+│   ├── http.cpp / http.h
+│   ├── logger.cpp / logger.h
+│   ├── main.cpp
+│   └── server.cpp / server.h
 ├── www/
 │   ├── index.html
 │   └── style.css
 └── logs/
 ```
+
+## Architecture
+
+Detailed module diagram: [docs/architecture.md](docs/architecture.md)
 
 ## Build and Run
 
@@ -59,6 +71,18 @@ This validates:
 - Traversal path attempt -> `400`
 - `HTTP/2.0` request line -> `505`
 
+Saved test proof: [docs/sample-test-output.txt](docs/sample-test-output.txt)
+
+## Logging Proof
+
+Saved sample logs: [docs/sample-log-output.txt](docs/sample-log-output.txt)
+
+Log format:
+
+```text
+[YYYY-MM-DD HH:MM:SS] METHOD PATH VERSION -> STATUS
+```
+
 ## Manual cURL Examples
 
 ```bash
@@ -71,4 +95,5 @@ curl --path-as-is -i http://127.0.0.1:8080/../etc/passwd
 ## Notes
 
 - Current implementation closes the connection after each response (`Connection: close`).
+- Max concurrent clients are configured in `src/main.cpp`.
 - This project is intended for learning systems and networking fundamentals.
