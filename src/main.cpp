@@ -4,6 +4,8 @@
 #include <string>
 #include <unordered_map>
 #include <ctime>
+#include <thread>
+#include <mutex>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <arpa/inet.h>
@@ -16,6 +18,9 @@ struct RequestLine
     std::string path;
     std::string version;
 };
+
+std::mutex g_log_mutex;
+std::mutex g_console_mutex;
 
 bool send_all(int socket_fd, const std::string &data)
 {
@@ -35,8 +40,10 @@ bool send_all(int socket_fd, const std::string &data)
 std::string current_timestamp()
 {
     std::time_t now = std::time(nullptr);
+    std::tm local_tm{};
+    localtime_r(&now, &local_tm);
     char time_buffer[32];
-    if (std::strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", std::localtime(&now)) == 0)
+    if (std::strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", &local_tm) == 0)
     {
         return "unknown-time";
     }
@@ -45,6 +52,7 @@ std::string current_timestamp()
 
 void log_request(const std::string &method, const std::string &path, const std::string &version, int status_code)
 {
+    std::lock_guard<std::mutex> lock(g_log_mutex);
     std::ofstream log_file("logs/server.log", std::ios::app);
     if (!log_file.good())
     {
@@ -204,6 +212,144 @@ bool read_file_bytes(const std::string &path, std::string &contents)
     return true;
 }
 
+void handle_client(int client_socket)
+{
+    std::string request;
+    int status_code = 0;
+    bool request_too_large = false;
+    std::string log_method = "-";
+    std::string log_path = "-";
+    std::string log_version = "-";
+    char buffer[4096];
+
+    while (true)
+    {
+        ssize_t bytes_read = recv(client_socket, buffer, sizeof(buffer), 0);
+        if (bytes_read <= 0)
+        {
+            break;
+        }
+
+        request.append(buffer, bytes_read);
+
+        if (request.find("\r\n\r\n") != std::string::npos)
+        {
+            break;
+        }
+
+        if (request.size() > 16384)
+        {
+            std::string response = build_response(400, "text/plain", "400 Bad Request");
+            send_all(client_socket, response);
+            log_request(log_method, log_path, log_version, 400);
+            request_too_large = true;
+            break;
+        }
+    }
+
+    if (request.empty() || request_too_large)
+    {
+        close(client_socket);
+        return;
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(g_console_mutex);
+        std::cout << "----- Incoming Request -----\n";
+        std::cout << request << "\n";
+        std::cout << "----------------------------\n";
+    }
+
+    size_t pos = request.find("\r\n");
+    if (pos == std::string::npos)
+    {
+        std::string response = build_response(400, "text/plain", "400 Bad Request");
+        send_all(client_socket, response);
+        log_request(log_method, log_path, log_version, 400);
+        close(client_socket);
+        return;
+    }
+
+    std::string request_line = request.substr(0, pos);
+    {
+        std::lock_guard<std::mutex> lock(g_console_mutex);
+        std::cout << "Request Line: " << request_line << std::endl;
+    }
+
+    RequestLine parsed_request{};
+    if (!parse_request_line(request_line, parsed_request))
+    {
+        std::string response = build_response(400, "text/plain", "400 Bad Request");
+        send_all(client_socket, response);
+        log_request(log_method, log_path, log_version, 400);
+        close(client_socket);
+        return;
+    }
+
+    log_method = parsed_request.method;
+    log_path = parsed_request.path;
+    log_version = parsed_request.version;
+
+    {
+        std::lock_guard<std::mutex> lock(g_console_mutex);
+        std::cout << "Method: " << parsed_request.method << std::endl;
+        std::cout << "Path: " << parsed_request.path << std::endl;
+        std::cout << "Version: " << parsed_request.version << std::endl;
+    }
+
+    if (!is_supported_http_version(parsed_request.version))
+    {
+        std::string response = build_response(505, "text/plain", "505 HTTP Version Not Supported");
+        send_all(client_socket, response);
+        log_request(log_method, log_path, log_version, 505);
+        close(client_socket);
+        return;
+    }
+
+    if (parsed_request.method != "GET")
+    {
+        std::string response = build_response(405, "text/plain", "405 Method Not Allowed");
+        send_all(client_socket, response);
+        log_request(log_method, log_path, log_version, 405);
+        close(client_socket);
+        return;
+    }
+
+    std::string path = strip_query_and_fragment(parsed_request.path);
+    if (!is_safe_path(path))
+    {
+        std::string response = build_response(400, "text/plain", "400 Bad Request");
+        send_all(client_socket, response);
+        log_request(log_method, log_path, log_version, 400);
+        close(client_socket);
+        return;
+    }
+
+    if (path == "/")
+    {
+        path = "/index.html";
+    }
+
+    std::string full_path = "www" + path;
+    std::string file_content;
+
+    if (read_file_bytes(full_path, file_content))
+    {
+        std::string response_str = build_response(200, get_mime_type(path), file_content);
+        send_all(client_socket, response_str);
+        status_code = 200;
+    }
+    else
+    {
+        std::string response = build_response(404, "text/plain", "404 Not Found");
+        send_all(client_socket, response);
+        status_code = 404;
+    }
+
+    log_request(log_method, log_path, log_version, status_code);
+    close(client_socket);
+}
+
 int main()
 {
     mkdir("logs", 0755);
@@ -244,130 +390,8 @@ int main()
             perror("accept");
             continue;
         }
-
-        std::string request;
-        int status_code = 0;
-        std::string log_method = "-";
-        std::string log_path = "-";
-        std::string log_version = "-";
-        char buffer[4096];
-        while (true)
-        {
-            ssize_t bytes_read = recv(client_socket, buffer, sizeof(buffer), 0);
-            if (bytes_read <= 0)
-            {
-                break;
-            }
-
-            request.append(buffer, bytes_read);
-
-            if (request.find("\r\n\r\n") != std::string::npos)
-            {
-                break;
-            }
-
-            if (request.size() > 16384)
-            {
-                std::string response = build_response(400, "text/plain", "400 Bad Request");
-                send_all(client_socket, response);
-                status_code = 400;
-                break;
-            }
-        }
-
-        if (request.empty())
-        {
-            close(client_socket);
-            continue;
-        }
-
-        std::cout << "----- Incoming Request -----\n";
-        std::cout << request << "\n";
-        std::cout << "----------------------------\n";
-
-        // Find first line (request line)
-        size_t pos = request.find("\r\n");
-        if (pos == std::string::npos)
-        {
-            std::string response = build_response(400, "text/plain", "400 Bad Request");
-            send_all(client_socket, response);
-            log_request(log_method, log_path, log_version, 400);
-            close(client_socket);
-            continue;
-        }
-        std::string request_line = request.substr(0, pos);
-
-        std::cout << "Request Line: " << request_line << std::endl;
-
-        RequestLine parsed_request{};
-        if (!parse_request_line(request_line, parsed_request))
-        {
-            std::string response = build_response(400, "text/plain", "400 Bad Request");
-            send_all(client_socket, response);
-            log_request(log_method, log_path, log_version, 400);
-            close(client_socket);
-            continue;
-        }
-
-        log_method = parsed_request.method;
-        log_path = parsed_request.path;
-        log_version = parsed_request.version;
-
-        std::cout << "Method: " << parsed_request.method << std::endl;
-        std::cout << "Path: " << parsed_request.path << std::endl;
-        std::cout << "Version: " << parsed_request.version << std::endl;
-
-        if (!is_supported_http_version(parsed_request.version))
-        {
-            std::string response = build_response(505, "text/plain", "505 HTTP Version Not Supported");
-            send_all(client_socket, response);
-            log_request(log_method, log_path, log_version, 505);
-            close(client_socket);
-            continue;
-        }
-
-        if (parsed_request.method != "GET")
-        {
-            std::string response = build_response(405, "text/plain", "405 Method Not Allowed");
-            send_all(client_socket, response);
-            log_request(log_method, log_path, log_version, 405);
-            close(client_socket);
-            continue;
-        }
-
-        std::string path = strip_query_and_fragment(parsed_request.path);
-        if (!is_safe_path(path))
-        {
-            std::string response = build_response(400, "text/plain", "400 Bad Request");
-            send_all(client_socket, response);
-            log_request(log_method, log_path, log_version, 400);
-            close(client_socket);
-            continue;
-        }
-
-        // If root path, serve index.html
-        if (path == "/")
-        {
-            path = "/index.html";
-        }
-
-        std::string full_path = "www" + path;
-        std::string file_content;
-
-        if (read_file_bytes(full_path, file_content))
-        {
-            std::string response_str = build_response(200, get_mime_type(path), file_content);
-            send_all(client_socket, response_str);
-            status_code = 200;
-        }
-        else
-        {
-            std::string response = build_response(404, "text/plain", "404 Not Found");
-            send_all(client_socket, response);
-            status_code = 404;
-        }
-        log_request(log_method, log_path, log_version, status_code);
-        close(client_socket);
+        std::thread client_thread(handle_client, client_socket);
+        client_thread.detach();
     }
 
     return 0;
