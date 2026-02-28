@@ -12,17 +12,19 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
+using namespace std;
+
 struct RequestLine
 {
-    std::string method;
-    std::string path;
-    std::string version;
+    string method;
+    string path;
+    string version;
 };
 
-std::mutex g_log_mutex;
-std::mutex g_console_mutex;
+mutex g_log_mutex;
+mutex g_console_mutex;
 
-bool send_all(int socket_fd, const std::string &data)
+bool send_all(int socket_fd, const string &data)
 {
     size_t total_sent = 0;
     while (total_sent < data.size())
@@ -37,23 +39,23 @@ bool send_all(int socket_fd, const std::string &data)
     return true;
 }
 
-std::string current_timestamp()
+string current_timestamp()
 {
-    std::time_t now = std::time(nullptr);
-    std::tm local_tm{};
+    time_t now = time(nullptr);
+    tm local_tm{};
     localtime_r(&now, &local_tm);
     char time_buffer[32];
-    if (std::strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", &local_tm) == 0)
+    if (strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", &local_tm) == 0)
     {
         return "unknown-time";
     }
-    return std::string(time_buffer);
+    return string(time_buffer);
 }
 
-void log_request(const std::string &method, const std::string &path, const std::string &version, int status_code)
+void log_request(const string &method, const string &path, const string &version, int status_code)
 {
-    std::lock_guard<std::mutex> lock(g_log_mutex);
-    std::ofstream log_file("logs/server.log", std::ios::app);
+    lock_guard<mutex> lock(g_log_mutex);
+    ofstream log_file("logs/server.log", ios::app);
     if (!log_file.good())
     {
         return;
@@ -66,7 +68,7 @@ void log_request(const std::string &method, const std::string &path, const std::
              << status_code << "\n";
 }
 
-std::string get_reason_phrase(int status_code)
+string get_reason_phrase(int status_code)
 {
     switch (status_code)
     {
@@ -85,9 +87,9 @@ std::string get_reason_phrase(int status_code)
     }
 }
 
-std::string build_response(int status_code, const std::string &content_type, const std::string &body)
+string build_response(int status_code, const string &content_type, const string &body)
 {
-    std::ostringstream response;
+    ostringstream response;
     response << "HTTP/1.1 " << status_code << " " << get_reason_phrase(status_code) << "\r\n";
     response << "Content-Type: " << content_type << "\r\n";
     response << "Content-Length: " << body.size() << "\r\n";
@@ -101,10 +103,10 @@ std::string build_response(int status_code, const std::string &content_type, con
     return response.str();
 }
 
-bool parse_request_line(const std::string &request_line, RequestLine &parsed)
+bool parse_request_line(const string &request_line, RequestLine &parsed)
 {
-    std::istringstream iss(request_line);
-    std::string extra;
+    istringstream iss(request_line);
+    string extra;
 
     if (!(iss >> parsed.method >> parsed.path >> parsed.version))
     {
@@ -124,31 +126,31 @@ bool parse_request_line(const std::string &request_line, RequestLine &parsed)
     return true;
 }
 
-bool is_supported_http_version(const std::string &version)
+bool is_supported_http_version(const string &version)
 {
     return version == "HTTP/1.1" || version == "HTTP/1.0";
 }
 
-std::string strip_query_and_fragment(const std::string &path)
+string strip_query_and_fragment(const string &path)
 {
     size_t query_pos = path.find('?');
     size_t fragment_pos = path.find('#');
-    size_t cut_pos = std::string::npos;
+    size_t cut_pos = string::npos;
 
-    if (query_pos != std::string::npos && fragment_pos != std::string::npos)
+    if (query_pos != string::npos && fragment_pos != string::npos)
     {
-        cut_pos = std::min(query_pos, fragment_pos);
+        cut_pos = min(query_pos, fragment_pos);
     }
-    else if (query_pos != std::string::npos)
+    else if (query_pos != string::npos)
     {
         cut_pos = query_pos;
     }
-    else if (fragment_pos != std::string::npos)
+    else if (fragment_pos != string::npos)
     {
         cut_pos = fragment_pos;
     }
 
-    if (cut_pos == std::string::npos)
+    if (cut_pos == string::npos)
     {
         return path;
     }
@@ -156,18 +158,18 @@ std::string strip_query_and_fragment(const std::string &path)
     return path.substr(0, cut_pos);
 }
 
-bool is_safe_path(const std::string &path)
+bool is_safe_path(const string &path)
 {
-    if (path.find("..") != std::string::npos)
+    if (path.find("..") != string::npos)
     {
         return false;
     }
-    return path.find('\\') == std::string::npos;
+    return path.find('\\') == string::npos;
 }
 
-std::string get_mime_type(const std::string &path)
+string get_mime_type(const string &path)
 {
-    static const std::unordered_map<std::string, std::string> mime_types = {
+    static const unordered_map<string, string> mime_types = {
         {".html", "text/html"},
         {".htm", "text/html"},
         {".css", "text/css"},
@@ -183,12 +185,12 @@ std::string get_mime_type(const std::string &path)
         {".pdf", "application/pdf"}};
 
     size_t dot_pos = path.find_last_of('.');
-    if (dot_pos == std::string::npos)
+    if (dot_pos == string::npos)
     {
         return "application/octet-stream";
     }
 
-    std::string ext = path.substr(dot_pos);
+    string ext = path.substr(dot_pos);
     auto it = mime_types.find(ext);
     if (it != mime_types.end())
     {
@@ -198,15 +200,15 @@ std::string get_mime_type(const std::string &path)
     return "application/octet-stream";
 }
 
-bool read_file_bytes(const std::string &path, std::string &contents)
+bool read_file_bytes(const string &path, string &contents)
 {
-    std::ifstream file(path, std::ios::binary);
+    ifstream file(path, ios::binary);
     if (!file.good())
     {
         return false;
     }
 
-    std::ostringstream ss;
+    ostringstream ss;
     ss << file.rdbuf();
     contents = ss.str();
     return true;
@@ -214,12 +216,12 @@ bool read_file_bytes(const std::string &path, std::string &contents)
 
 void handle_client(int client_socket)
 {
-    std::string request;
+    string request;
     int status_code = 0;
     bool request_too_large = false;
-    std::string log_method = "-";
-    std::string log_path = "-";
-    std::string log_version = "-";
+    string log_method = "-";
+    string log_path = "-";
+    string log_version = "-";
     char buffer[4096];
 
     while (true)
@@ -232,14 +234,14 @@ void handle_client(int client_socket)
 
         request.append(buffer, bytes_read);
 
-        if (request.find("\r\n\r\n") != std::string::npos)
+        if (request.find("\r\n\r\n") != string::npos)
         {
             break;
         }
 
         if (request.size() > 16384)
         {
-            std::string response = build_response(400, "text/plain", "400 Bad Request");
+            string response = build_response(400, "text/plain", "400 Bad Request");
             send_all(client_socket, response);
             log_request(log_method, log_path, log_version, 400);
             request_too_large = true;
@@ -254,32 +256,32 @@ void handle_client(int client_socket)
     }
 
     {
-        std::lock_guard<std::mutex> lock(g_console_mutex);
-        std::cout << "----- Incoming Request -----\n";
-        std::cout << request << "\n";
-        std::cout << "----------------------------\n";
+        lock_guard<mutex> lock(g_console_mutex);
+        cout << "----- Incoming Request -----\n";
+        cout << request << "\n";
+        cout << "----------------------------\n";
     }
 
     size_t pos = request.find("\r\n");
-    if (pos == std::string::npos)
+    if (pos == string::npos)
     {
-        std::string response = build_response(400, "text/plain", "400 Bad Request");
+        string response = build_response(400, "text/plain", "400 Bad Request");
         send_all(client_socket, response);
         log_request(log_method, log_path, log_version, 400);
         close(client_socket);
         return;
     }
 
-    std::string request_line = request.substr(0, pos);
+    string request_line = request.substr(0, pos);
     {
-        std::lock_guard<std::mutex> lock(g_console_mutex);
-        std::cout << "Request Line: " << request_line << std::endl;
+        lock_guard<mutex> lock(g_console_mutex);
+        cout << "Request Line: " << request_line << endl;
     }
 
     RequestLine parsed_request{};
     if (!parse_request_line(request_line, parsed_request))
     {
-        std::string response = build_response(400, "text/plain", "400 Bad Request");
+        string response = build_response(400, "text/plain", "400 Bad Request");
         send_all(client_socket, response);
         log_request(log_method, log_path, log_version, 400);
         close(client_socket);
@@ -291,15 +293,15 @@ void handle_client(int client_socket)
     log_version = parsed_request.version;
 
     {
-        std::lock_guard<std::mutex> lock(g_console_mutex);
-        std::cout << "Method: " << parsed_request.method << std::endl;
-        std::cout << "Path: " << parsed_request.path << std::endl;
-        std::cout << "Version: " << parsed_request.version << std::endl;
+        lock_guard<mutex> lock(g_console_mutex);
+        cout << "Method: " << parsed_request.method << endl;
+        cout << "Path: " << parsed_request.path << endl;
+        cout << "Version: " << parsed_request.version << endl;
     }
 
     if (!is_supported_http_version(parsed_request.version))
     {
-        std::string response = build_response(505, "text/plain", "505 HTTP Version Not Supported");
+        string response = build_response(505, "text/plain", "505 HTTP Version Not Supported");
         send_all(client_socket, response);
         log_request(log_method, log_path, log_version, 505);
         close(client_socket);
@@ -308,17 +310,17 @@ void handle_client(int client_socket)
 
     if (parsed_request.method != "GET")
     {
-        std::string response = build_response(405, "text/plain", "405 Method Not Allowed");
+        string response = build_response(405, "text/plain", "405 Method Not Allowed");
         send_all(client_socket, response);
         log_request(log_method, log_path, log_version, 405);
         close(client_socket);
         return;
     }
 
-    std::string path = strip_query_and_fragment(parsed_request.path);
+    string path = strip_query_and_fragment(parsed_request.path);
     if (!is_safe_path(path))
     {
-        std::string response = build_response(400, "text/plain", "400 Bad Request");
+        string response = build_response(400, "text/plain", "400 Bad Request");
         send_all(client_socket, response);
         log_request(log_method, log_path, log_version, 400);
         close(client_socket);
@@ -330,18 +332,18 @@ void handle_client(int client_socket)
         path = "/index.html";
     }
 
-    std::string full_path = "www" + path;
-    std::string file_content;
+    string full_path = "www" + path;
+    string file_content;
 
     if (read_file_bytes(full_path, file_content))
     {
-        std::string response_str = build_response(200, get_mime_type(path), file_content);
+        string response_str = build_response(200, get_mime_type(path), file_content);
         send_all(client_socket, response_str);
         status_code = 200;
     }
     else
     {
-        std::string response = build_response(404, "text/plain", "404 Not Found");
+        string response = build_response(404, "text/plain", "404 Not Found");
         send_all(client_socket, response);
         status_code = 404;
     }
@@ -380,7 +382,7 @@ int main()
         return 1;
     }
 
-    std::cout << "Server running on port 8080...\n";
+    cout << "Server running on port 8080...\n";
 
     while (true)
     {
@@ -390,7 +392,7 @@ int main()
             perror("accept");
             continue;
         }
-        std::thread client_thread(handle_client, client_socket);
+        thread client_thread(handle_client, client_socket);
         client_thread.detach();
     }
 
