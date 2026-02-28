@@ -1,4 +1,19 @@
 g++ -std=c++17 -Wall src/files.cpp src/http.cpp src/logger.cpp src/main.cpp src/server.cpp -o server
+g++ -std=c++17 -Wall -Isrc tests/unit_tests.cpp src/http.cpp src/files.cpp -o unit_tests
+./unit_tests
+PASS: parse valid request line
+PASS: method parsed correctly
+PASS: path parsed correctly
+PASS: version parsed correctly
+PASS: reject missing version
+PASS: reject extra token
+PASS: reject non-slash path
+PASS: strip query and fragment
+PASS: preserve plain path
+PASS: safe path accepted
+PASS: reject traversal path
+PASS: reject backslash path
+All unit tests passed.
 ./scripts/test.sh
 [1/4] Building server...
 [2/4] Starting server...

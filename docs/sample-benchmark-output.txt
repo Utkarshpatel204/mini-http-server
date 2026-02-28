@@ -1,0 +1,7 @@
+Benchmark Date (UTC): 2026-02-28 13:51:57
+Requests: 1000
+Concurrency: 50
+Duration (seconds): 0.913932
+Throughput (requests/sec): 1094.17
+HTTP 200 responses: 1000
+Non-200 responses: 0
