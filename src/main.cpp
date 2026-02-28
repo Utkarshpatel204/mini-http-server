@@ -1,12 +1,19 @@
 #include <iostream>
-#include <cstring>
 #include <sstream>
 #include <fstream>
 #include <string>
+#include <unordered_map>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
+
+struct RequestLine
+{
+    std::string method;
+    std::string path;
+    std::string version;
+};
 
 bool send_all(int socket_fd, const std::string &data)
 {
@@ -23,12 +30,158 @@ bool send_all(int socket_fd, const std::string &data)
     return true;
 }
 
+std::string get_reason_phrase(int status_code)
+{
+    switch (status_code)
+    {
+    case 200:
+        return "OK";
+    case 400:
+        return "Bad Request";
+    case 404:
+        return "Not Found";
+    case 405:
+        return "Method Not Allowed";
+    case 505:
+        return "HTTP Version Not Supported";
+    default:
+        return "Internal Server Error";
+    }
+}
+
+std::string build_response(int status_code, const std::string &content_type, const std::string &body)
+{
+    std::ostringstream response;
+    response << "HTTP/1.1 " << status_code << " " << get_reason_phrase(status_code) << "\r\n";
+    response << "Content-Type: " << content_type << "\r\n";
+    response << "Content-Length: " << body.size() << "\r\n";
+    response << "Connection: close\r\n";
+    if (status_code == 405)
+    {
+        response << "Allow: GET\r\n";
+    }
+    response << "\r\n";
+    response << body;
+    return response.str();
+}
+
+bool parse_request_line(const std::string &request_line, RequestLine &parsed)
+{
+    std::istringstream iss(request_line);
+    std::string extra;
+
+    if (!(iss >> parsed.method >> parsed.path >> parsed.version))
+    {
+        return false;
+    }
+
+    if (iss >> extra)
+    {
+        return false;
+    }
+
+    if (parsed.path.empty() || parsed.path[0] != '/')
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool is_supported_http_version(const std::string &version)
+{
+    return version == "HTTP/1.1" || version == "HTTP/1.0";
+}
+
+std::string strip_query_and_fragment(const std::string &path)
+{
+    size_t query_pos = path.find('?');
+    size_t fragment_pos = path.find('#');
+    size_t cut_pos = std::string::npos;
+
+    if (query_pos != std::string::npos && fragment_pos != std::string::npos)
+    {
+        cut_pos = std::min(query_pos, fragment_pos);
+    }
+    else if (query_pos != std::string::npos)
+    {
+        cut_pos = query_pos;
+    }
+    else if (fragment_pos != std::string::npos)
+    {
+        cut_pos = fragment_pos;
+    }
+
+    if (cut_pos == std::string::npos)
+    {
+        return path;
+    }
+
+    return path.substr(0, cut_pos);
+}
+
+bool is_safe_path(const std::string &path)
+{
+    if (path.find("..") != std::string::npos)
+    {
+        return false;
+    }
+    return path.find('\\') == std::string::npos;
+}
+
+std::string get_mime_type(const std::string &path)
+{
+    static const std::unordered_map<std::string, std::string> mime_types = {
+        {".html", "text/html"},
+        {".htm", "text/html"},
+        {".css", "text/css"},
+        {".js", "application/javascript"},
+        {".json", "application/json"},
+        {".txt", "text/plain"},
+        {".png", "image/png"},
+        {".jpg", "image/jpeg"},
+        {".jpeg", "image/jpeg"},
+        {".gif", "image/gif"},
+        {".svg", "image/svg+xml"},
+        {".ico", "image/x-icon"},
+        {".pdf", "application/pdf"}};
+
+    size_t dot_pos = path.find_last_of('.');
+    if (dot_pos == std::string::npos)
+    {
+        return "application/octet-stream";
+    }
+
+    std::string ext = path.substr(dot_pos);
+    auto it = mime_types.find(ext);
+    if (it != mime_types.end())
+    {
+        return it->second;
+    }
+
+    return "application/octet-stream";
+}
+
+bool read_file_bytes(const std::string &path, std::string &contents)
+{
+    std::ifstream file(path, std::ios::binary);
+    if (!file.good())
+    {
+        return false;
+    }
+
+    std::ostringstream ss;
+    ss << file.rdbuf();
+    contents = ss.str();
+    return true;
+}
+
 int main()
 {
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
-    if (server_fd == 0)
+    if (server_fd < 0)
     {
         perror("socket failed");
         return 1;
@@ -78,6 +231,13 @@ int main()
             {
                 break;
             }
+
+            if (request.size() > 16384)
+            {
+                std::string response = build_response(400, "text/plain", "400 Bad Request");
+                send_all(client_socket, response);
+                break;
+            }
         }
 
         if (request.empty())
@@ -94,6 +254,8 @@ int main()
         size_t pos = request.find("\r\n");
         if (pos == std::string::npos)
         {
+            std::string response = build_response(400, "text/plain", "400 Bad Request");
+            send_all(client_socket, response);
             close(client_socket);
             continue;
         }
@@ -101,14 +263,43 @@ int main()
 
         std::cout << "Request Line: " << request_line << std::endl;
 
-        // Split request line into parts
-        std::istringstream iss(request_line);
-        std::string method, path, version;
-        iss >> method >> path >> version;
+        RequestLine parsed_request{};
+        if (!parse_request_line(request_line, parsed_request))
+        {
+            std::string response = build_response(400, "text/plain", "400 Bad Request");
+            send_all(client_socket, response);
+            close(client_socket);
+            continue;
+        }
 
-        std::cout << "Method: " << method << std::endl;
-        std::cout << "Path: " << path << std::endl;
-        std::cout << "Version: " << version << std::endl;
+        std::cout << "Method: " << parsed_request.method << std::endl;
+        std::cout << "Path: " << parsed_request.path << std::endl;
+        std::cout << "Version: " << parsed_request.version << std::endl;
+
+        if (!is_supported_http_version(parsed_request.version))
+        {
+            std::string response = build_response(505, "text/plain", "505 HTTP Version Not Supported");
+            send_all(client_socket, response);
+            close(client_socket);
+            continue;
+        }
+
+        if (parsed_request.method != "GET")
+        {
+            std::string response = build_response(405, "text/plain", "405 Method Not Allowed");
+            send_all(client_socket, response);
+            close(client_socket);
+            continue;
+        }
+
+        std::string path = strip_query_and_fragment(parsed_request.path);
+        if (!is_safe_path(path))
+        {
+            std::string response = build_response(400, "text/plain", "400 Bad Request");
+            send_all(client_socket, response);
+            close(client_socket);
+            continue;
+        }
 
         // If root path, serve index.html
         if (path == "/")
@@ -117,36 +308,17 @@ int main()
         }
 
         std::string full_path = "www" + path;
+        std::string file_content;
 
-        // Try opening the file
-        std::ifstream file(full_path, std::ios::binary);
-
-        if (file.good())
+        if (read_file_bytes(full_path, file_content))
         {
-            std::ostringstream ss;
-            ss << file.rdbuf();
-            std::string file_content = ss.str();
-
-            std::ostringstream response;
-            response << "HTTP/1.1 200 OK\r\n";
-            response << "Content-Type: text/html\r\n";
-            response << "Content-Length: " << file_content.size() << "\r\n";
-            response << "\r\n";
-            response << file_content;
-
-            std::string response_str = response.str();
+            std::string response_str = build_response(200, get_mime_type(path), file_content);
             send_all(client_socket, response_str);
         }
         else
         {
-            std::string not_found =
-                "HTTP/1.1 404 Not Found\r\n"
-                "Content-Type: text/plain\r\n"
-                "Content-Length: 13\r\n"
-                "\r\n"
-                "404 Not Found";
-
-            send_all(client_socket, not_found);
+            std::string response = build_response(404, "text/plain", "404 Not Found");
+            send_all(client_socket, response);
         }
         close(client_socket);
     }
