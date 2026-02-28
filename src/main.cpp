@@ -3,6 +3,8 @@
 #include <fstream>
 #include <string>
 #include <unordered_map>
+#include <ctime>
+#include <sys/stat.h>
 #include <unistd.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -28,6 +30,32 @@ bool send_all(int socket_fd, const std::string &data)
         total_sent += static_cast<size_t>(sent);
     }
     return true;
+}
+
+std::string current_timestamp()
+{
+    std::time_t now = std::time(nullptr);
+    char time_buffer[32];
+    if (std::strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", std::localtime(&now)) == 0)
+    {
+        return "unknown-time";
+    }
+    return std::string(time_buffer);
+}
+
+void log_request(const std::string &method, const std::string &path, const std::string &version, int status_code)
+{
+    std::ofstream log_file("logs/server.log", std::ios::app);
+    if (!log_file.good())
+    {
+        return;
+    }
+
+    log_file << "[" << current_timestamp() << "] "
+             << method << " "
+             << path << " "
+             << version << " -> "
+             << status_code << "\n";
 }
 
 std::string get_reason_phrase(int status_code)
@@ -178,6 +206,8 @@ bool read_file_bytes(const std::string &path, std::string &contents)
 
 int main()
 {
+    mkdir("logs", 0755);
+
     int server_fd = socket(AF_INET, SOCK_STREAM, 0);
     int opt = 1;
     setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
@@ -216,6 +246,10 @@ int main()
         }
 
         std::string request;
+        int status_code = 0;
+        std::string log_method = "-";
+        std::string log_path = "-";
+        std::string log_version = "-";
         char buffer[4096];
         while (true)
         {
@@ -236,6 +270,7 @@ int main()
             {
                 std::string response = build_response(400, "text/plain", "400 Bad Request");
                 send_all(client_socket, response);
+                status_code = 400;
                 break;
             }
         }
@@ -256,6 +291,7 @@ int main()
         {
             std::string response = build_response(400, "text/plain", "400 Bad Request");
             send_all(client_socket, response);
+            log_request(log_method, log_path, log_version, 400);
             close(client_socket);
             continue;
         }
@@ -268,9 +304,14 @@ int main()
         {
             std::string response = build_response(400, "text/plain", "400 Bad Request");
             send_all(client_socket, response);
+            log_request(log_method, log_path, log_version, 400);
             close(client_socket);
             continue;
         }
+
+        log_method = parsed_request.method;
+        log_path = parsed_request.path;
+        log_version = parsed_request.version;
 
         std::cout << "Method: " << parsed_request.method << std::endl;
         std::cout << "Path: " << parsed_request.path << std::endl;
@@ -280,6 +321,7 @@ int main()
         {
             std::string response = build_response(505, "text/plain", "505 HTTP Version Not Supported");
             send_all(client_socket, response);
+            log_request(log_method, log_path, log_version, 505);
             close(client_socket);
             continue;
         }
@@ -288,6 +330,7 @@ int main()
         {
             std::string response = build_response(405, "text/plain", "405 Method Not Allowed");
             send_all(client_socket, response);
+            log_request(log_method, log_path, log_version, 405);
             close(client_socket);
             continue;
         }
@@ -297,6 +340,7 @@ int main()
         {
             std::string response = build_response(400, "text/plain", "400 Bad Request");
             send_all(client_socket, response);
+            log_request(log_method, log_path, log_version, 400);
             close(client_socket);
             continue;
         }
@@ -314,12 +358,15 @@ int main()
         {
             std::string response_str = build_response(200, get_mime_type(path), file_content);
             send_all(client_socket, response_str);
+            status_code = 200;
         }
         else
         {
             std::string response = build_response(404, "text/plain", "404 Not Found");
             send_all(client_socket, response);
+            status_code = 404;
         }
+        log_request(log_method, log_path, log_version, status_code);
         close(client_socket);
     }
 
